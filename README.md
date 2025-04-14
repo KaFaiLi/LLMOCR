@@ -1,66 +1,80 @@
 # LLMOCR
 
-LLMOCR is a Python-based application for extracting and processing text from PDF documents using OCR (Optical Character Recognition) and LLM (Large Language Model) technologies. It combines the power of Tesseract, EasyOCR, and LangChain to provide accurate and structured text extraction.
+A Python package for OCR processing with LLM enhancement, combining Tesseract and EasyOCR with language model capabilities.
 
-## Features
+## Project Structure
 
-- Extracts text from PDF documents using Tesseract and EasyOCR.
-- Combines OCR results using a Large Language Model (LLM) for improved accuracy.
-- Extracts structured information (e.g., invoice details) using LangChain and Pydantic.
-- Supports image preprocessing for better OCR quality.
-- Saves results in an Excel file for easy access.
-
-## Requirements
-
-- Python 3.8 or higher
-- Tesseract OCR installed and configured
-- OpenAI API key for LLM integration
+```
+LLMOCR/
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── models.py
+│   └── processor.py
+├── requirements.txt
+└── README.md
+```
 
 ## Installation
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/KaFaiLi/LLMOCR.git
-   cd LLMOCR
-   ```
+```bash
+git clone https://github.com/yourusername/LLMOCR.git
+cd LLMOCR
+```
 
-2. Install the required Python packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
+2. Create a virtual environment and activate it:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-3. Install Tesseract OCR:
-   - Windows: Download and install from [Tesseract OCR](https://github.com/tesseract-ocr/tesseract).
-   - Linux: Install via package manager (e.g., `sudo apt install tesseract-ocr`).
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-4. Update the `Config` class in `slow.py` with your OpenAI API key and Tesseract path if needed.
+4. Install Tesseract OCR:
+- On macOS: `brew install tesseract`
+- On Ubuntu: `sudo apt-get install tesseract-ocr`
+- On Windows: Download and install from [GitHub](https://github.com/UB-Mannheim/tesseract/wiki)
 
 ## Usage
 
-1. Place your PDF files in the `input_pdfs` folder.
-2. Run the application:
-   ```bash
-   python main.py
-   ```
-3. Processed images and results will be saved in the `output` folder.
+1. Place your PDF files in the `input_pdfs` directory
+2. Run the main script:
+```bash
+python src/main.py
+```
 
-## Folder Structure
-
-- `input_pdfs`: Folder for input PDF files.
-- `output/images`: Folder for extracted images from PDFs.
-- `output/results`: Folder for OCR results and Excel file.
+3. Results will be saved in the `output` directory:
+- `output/images/`: Extracted and enhanced images
+- `output/results/`: OCR results in Excel format
 
 ## Configuration
 
-The `Config` class in `main.py` allows you to customize the following:
+Edit `src/config.py` to customize:
+- Input/output directories
+- OCR settings
+- LLM model and API key
+- Extraction fields
 
-- Input and output folder paths.
-- Tesseract command path.
-- Image preprocessing settings (DPI, scale factor, denoise strength).
-- LLM model name and API key.
-- Fields to extract from the text.
+## Features
 
+- PDF to image conversion
+- Image preprocessing and enhancement
+- OCR using both Tesseract and EasyOCR
+- LLM-based text correction and enhancement
+- Structured information extraction
+- Results export to Excel
 
-## Contributing
+## Requirements
 
-Contributions are welcome! Feel free to open issues or submit pull requests.
+- Python 3.8+
+- Tesseract OCR
+- CUDA (optional, for GPU acceleration with EasyOCR)
+
+## License
+
+MIT License
