@@ -54,7 +54,9 @@ class PDFProcessor:
             'pdf_name', 
             'page_number', 
             'tesseract_text', 
+            'tesseract_confidence',
             'easyocr_text', 
+            'easyocr_confidence',
             'combined_text',
             'llm_markdown',
             *config.EXTRACT_FIELDS
@@ -117,8 +119,8 @@ class PDFProcessor:
             enhanced_image = self.preprocess_image(image_path)
             
             # Run traditional OCR
-            tesseract_text = self.run_tesseract_ocr(enhanced_image)
-            easyocr_text = self.run_easyocr(enhanced_image)
+            tesseract_text, tesseract_confidence = self.run_tesseract_ocr(enhanced_image)
+            easyocr_text, easyocr_confidence = self.run_easyocr(enhanced_image)
             
             # Initialize LLM markdown as empty string
             llm_markdown = ""
@@ -144,7 +146,9 @@ class PDFProcessor:
                 'pdf_name': pdf_name,
                 'page_number': page_number,
                 'tesseract_text': tesseract_text,
+                'tesseract_confidence': tesseract_confidence,
                 'easyocr_text': easyocr_text,
+                'easyocr_confidence': easyocr_confidence,
                 'combined_text': combined_text,
                 'llm_markdown': llm_markdown
             }
@@ -179,17 +183,45 @@ class PDFProcessor:
         cv2.imwrite(enhanced_path, enhanced)
         return enhanced
     
-    def run_tesseract_ocr(self, image: Any) -> str:
-        """Run Tesseract OCR on the image"""
+    def run_tesseract_ocr(self, image: Any) -> Tuple[str, float]:
+        """Run Tesseract OCR on the image and return text and average confidence"""
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, config=custom_config)
-        return text.strip()
+        try:
+            data = pytesseract.image_to_data(image, config=custom_config, output_type=pytesseract.Output.DATAFRAME)
+            # Filter out non-meaningful confidence values (often -1 for blocks/lines)
+            data = data[data.conf != -1]
+            if not data.empty:
+                # Concatenate words to form the text
+                text = " ".join(data['text'].astype(str).tolist())
+                # Calculate average confidence, handling potential NaNs if no words are found
+                avg_confidence = data['conf'].mean()
+                if pd.isna(avg_confidence): # if no words with confidences were found
+                    avg_confidence = 0.0
+            else:
+                text = ""
+                avg_confidence = 0.0
+            return text.strip(), float(avg_confidence / 100.0) # Normalize to 0-1 scale
+        except Exception as e:
+            logging.error(f"Error during Tesseract OCR: {str(e)}")
+            return "", 0.0
     
-    def run_easyocr(self, image: Any) -> str:
-        """Run EasyOCR on the image"""
-        result = self.reader.readtext(image)
-        text = ' '.join([item[1] for item in result])
-        return text.strip()
+    def run_easyocr(self, image: Any) -> Tuple[str, float]:
+        """Run EasyOCR on the image and return text and average confidence"""
+        try:
+            result = self.reader.readtext(image)
+            if not result:
+                return "", 0.0
+            
+            texts = [item[1] for item in result]
+            confidences = [item[2] for item in result]
+            
+            text = ' '.join(texts)
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+            
+            return text.strip(), float(avg_confidence) # Already in 0-1 scale
+        except Exception as e:
+            logging.error(f"Error during EasyOCR: {str(e)}")
+            return "", 0.0
     
     def process_image_with_llm(self, image_path: str) -> str:
         """Process image using GPT-4 Vision and return markdown formatted text"""
