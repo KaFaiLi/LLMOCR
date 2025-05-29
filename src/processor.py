@@ -8,7 +8,7 @@ import fitz  # PyMuPDF
 import pandas as pd
 import requests
 import base64
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 from PIL import Image
 import io
 from mimetypes import guess_type
@@ -119,8 +119,8 @@ class PDFProcessor:
             enhanced_image = self.preprocess_image(image_path)
             
             # Run traditional OCR
-            tesseract_text, tesseract_confidence = self.run_tesseract_ocr(enhanced_image)
-            easyocr_text, easyocr_confidence = self.run_easyocr(enhanced_image)
+            tesseract_data, tesseract_text, tesseract_confidence = self.run_tesseract_ocr(enhanced_image)
+            easyocr_data, easyocr_text, easyocr_confidence = self.run_easyocr(enhanced_image)
             
             # Initialize LLM markdown as empty string
             llm_markdown = ""
@@ -138,7 +138,10 @@ class PDFProcessor:
                     f.write(llm_markdown)
             
             # Combine OCR results with LLM markdown
-            combined_text = self.enhance_with_llm(tesseract_text, easyocr_text, llm_markdown)
+            combined_text = self.enhance_with_llm(
+                tesseract_text, easyocr_text, llm_markdown,
+                tesseract_data=tesseract_data, easyocr_data=easyocr_data
+            )
             extracted_info = self.extract_with_llm(combined_text)
             
             # Build result row
@@ -183,45 +186,70 @@ class PDFProcessor:
         cv2.imwrite(enhanced_path, enhanced)
         return enhanced
     
-    def run_tesseract_ocr(self, image: Any) -> Tuple[str, float]:
-        """Run Tesseract OCR on the image and return text and average confidence"""
+    def run_tesseract_ocr(self, image: Any) -> Tuple[List[Dict[str, Any]], str, float]:
+        """Run Tesseract OCR on the image and return structured data, plain text, and average confidence"""
         custom_config = r'--oem 3 --psm 6'
+        structured_results = []
+        plain_text = ""
+        avg_confidence = 0.0
+
         try:
             data = pytesseract.image_to_data(image, config=custom_config, output_type=pytesseract.Output.DATAFRAME)
-            # Filter out non-meaningful confidence values (often -1 for blocks/lines)
+            # Filter out non-meaningful confidence values and empty text
             data = data[data.conf != -1]
+            data.dropna(subset=['text'], inplace=True)
+            data = data[data['text'].astype(str).str.strip() != '']
+
             if not data.empty:
-                # Concatenate words to form the text
-                text = " ".join(data['text'].astype(str).tolist())
-                # Calculate average confidence, handling potential NaNs if no words are found
-                avg_confidence = data['conf'].mean()
-                if pd.isna(avg_confidence): # if no words with confidences were found
-                    avg_confidence = 0.0
-            else:
-                text = ""
-                avg_confidence = 0.0
-            return text.strip(), float(avg_confidence / 100.0) # Normalize to 0-1 scale
+                for _, row in data.iterrows():
+                    structured_results.append({
+                        'text': str(row['text']),
+                        'left': int(row['left']),
+                        'top': int(row['top']),
+                        'width': int(row['width']),
+                        'height': int(row['height']),
+                        'conf': float(row['conf'] / 100.0)  # Normalize confidence to 0-1
+                    })
+                
+                plain_text = " ".join(data['text'].astype(str).tolist())
+                
+                # Calculate average confidence from valid word confidences
+                if not data['conf'].empty:
+                    conf_mean = data['conf'].mean()
+                    avg_confidence = 0.0 if pd.isna(conf_mean) else float(conf_mean / 100.0)
+            
+            return structured_results, plain_text.strip(), avg_confidence
         except Exception as e:
             logging.error(f"Error during Tesseract OCR: {str(e)}")
-            return "", 0.0
+            return [], "", 0.0
     
-    def run_easyocr(self, image: Any) -> Tuple[str, float]:
-        """Run EasyOCR on the image and return text and average confidence"""
+    def run_easyocr(self, image: Any) -> Tuple[List[Dict[str, Any]], str, float]:
+        """Run EasyOCR on the image and return structured_data, plain text, and average confidence"""
+        structured_results = []
+        all_texts = []
+        all_confidences = []
+
         try:
-            result = self.reader.readtext(image)
+            result = self.reader.readtext(image) # list of (bbox, text, confidence)
             if not result:
-                return "", 0.0
+                return [], "", 0.0
             
-            texts = [item[1] for item in result]
-            confidences = [item[2] for item in result]
+            for (bbox, text, conf) in result:
+                structured_results.append({
+                    'text': text,
+                    'bbox': bbox, 
+                    'conf': float(conf) 
+                })
+                all_texts.append(text)
+                all_confidences.append(float(conf))
             
-            text = ' '.join(texts)
-            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+            plain_text = ' '.join(all_texts)
+            avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
             
-            return text.strip(), float(avg_confidence) # Already in 0-1 scale
+            return structured_results, plain_text.strip(), avg_confidence
         except Exception as e:
             logging.error(f"Error during EasyOCR: {str(e)}")
-            return "", 0.0
+            return [], "", 0.0
     
     def process_image_with_llm(self, image_path: str) -> str:
         """Process image using GPT-4 Vision and return markdown formatted text"""
@@ -262,16 +290,28 @@ class PDFProcessor:
             logging.error(f"Error processing image with LLM: {str(e)}")
             return "Error processing image with LLM"
     
-    def enhance_with_llm(self, tesseract_text: str, easyocr_text: str, llm_markdown: str) -> str:
+    def enhance_with_llm(self, tesseract_text: str, easyocr_text: str, llm_markdown: str,
+                         tesseract_data: List[Dict[str, Any]] = None,
+                         easyocr_data: List[Dict[str, Any]] = None) -> str:
         """Use LLM to enhance and combine OCR results with LLM markdown"""
+        
+        if not self.config.USE_LLM:
+            # If LLM is not used, tesseract_data and easyocr_data are not used here.
+            # We still rely on the plain text versions for the basic combination.
+            return f"{tesseract_text}\n\n{easyocr_text}"
+
+        # TODO: Update the prompt to utilize tesseract_data and easyocr_data for layout preservation
+        # For now, the prompt uses the plain text versions as before.
+        # The structured data is available for future enhancement of this prompt.
         prompt = f"""
         You are given three sources of text for the same document:
-        1. Tesseract OCR result
-        2. EasyOCR result
-        3. LLM-generated markdown
+        1. Tesseract OCR result (plain text)
+        2. EasyOCR result (plain text)
+        3. LLM-generated markdown (from image analysis)
         
         Your task is to combine them into a single, accurate, and well-formatted text. 
         Use the LLM markdown as the primary structure and incorporate the OCR results to fill in any gaps or correct any errors.
+        Consider the possibility that OCR results might contain more detailed or accurate text for certain parts.
         
         Tesseract OCR result:
         {tesseract_text}
@@ -282,11 +322,8 @@ class PDFProcessor:
         LLM Markdown:
         {llm_markdown}
         
-        Combined and corrected result:
+        Combined and corrected result (aim for well-structured Markdown):
         """
-        
-        if not self.config.USE_LLM:
-            return f"{tesseract_text}\n\n{easyocr_text}"
         
         try:
             response = self.llm([
